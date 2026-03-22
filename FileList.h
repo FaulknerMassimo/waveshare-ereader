@@ -277,14 +277,38 @@ private:
 
     for (int x = 0; x < EPD_3IN97_WIDTH; x++) px(fb, x, bar_y, TONE_BLACK);
 
-    char left[32], right[20];
+    int bat_pct = battery_pct;
+    if (bat_pct < 0) bat_pct = 0;
+    if (bat_pct > 100) bat_pct = 100;
+
+    char left[32], right[16];
     snprintf(left, sizeof(left), "Book %d / %d", m_sel + 1, (int)m_entries.size());
-    snprintf(right, sizeof(right), "Battery: %d%%", battery_pct);
+    snprintf(right, sizeof(right), "%d%%", bat_pct);
 
     Paint_DrawString_EN(10, bar_y + 3, left, &Font12, WHITE, BLACK);
 
-    int rx = EPD_3IN97_WIDTH - (int)strlen(right) * Font12.Width - 10;
-    Paint_DrawString_EN(rx, bar_y + 3, right, &Font12, WHITE, BLACK);
+    int right_px = (int)strlen(right) * Font12.Width;
+    const int icon_w = 16;
+    const int icon_h = 8;
+    const int icon_tip_w = 2;
+    const int icon_gap = 4;
+    const int group_w = icon_w + icon_gap + right_px;
+    int group_x = EPD_3IN97_WIDTH - group_w - 10;
+
+    int icon_x = group_x;
+    int icon_y = bar_y + 5;
+    int body_x2 = icon_x + icon_w;
+    int body_y2 = icon_y + icon_h;
+    Paint_DrawRectangle(icon_x, icon_y, body_x2, body_y2, BLACK, DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
+    int tip_y = icon_y + (icon_h / 2) - 2;
+    Paint_DrawRectangle(body_x2 + 1, tip_y, body_x2 + icon_tip_w, tip_y + 3, BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+
+    int inner_w = icon_w - 2;
+    int fill_w = (inner_w * bat_pct) / 100;
+    if (fill_w > 0)
+      Paint_DrawRectangle(icon_x + 1, icon_y + 1, icon_x + fill_w, body_y2 - 1, BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+
+    Paint_DrawString_EN(group_x + icon_w + icon_gap, bar_y + 3, right, &Font12, WHITE, BLACK);
   }
 
   void blit(UBYTE *fb, const uint8_t *cover, int dx, int dy) {
@@ -352,15 +376,24 @@ private:
     File entry = root.openNextFile();
     while (entry) {
       std::string base(path);
-      if (base.back() != '/') base += '/';
-      std::string fname = entry.name(), fpath = base + fname;
+      if (!base.empty() && base.back() != '/') base += '/';
+
+      std::string raw_name = entry.name();
+      std::string fpath;
+      if (!raw_name.empty() && raw_name.front() == '/') fpath = raw_name;
+      else fpath = base + raw_name;
+
+      size_t slash = fpath.find_last_of('/');
+      std::string fname = (slash == std::string::npos) ? fpath : fpath.substr(slash + 1);
 
       if (entry.isDirectory()) {
-        if (strlen(path) < 200) scan_dir(fpath.c_str());
+        if (fpath.length() < 200) scan_dir(fpath.c_str());
       } else {
         std::string fl = fname;
         std::transform(fl.begin(), fl.end(), fl.begin(), ::tolower);
-        if ((fl.rfind(".epub") != std::string::npos || fl.rfind(".txt") != std::string::npos)
+        bool is_epub = fl.length() >= 5 && fl.compare(fl.length() - 5, 5, ".epub") == 0;
+        bool is_txt  = fl.length() >= 4 && fl.compare(fl.length() - 4, 4, ".txt") == 0;
+        if ((is_epub || is_txt)
             && (int)m_entries.size() < FL_MAX_FILES) {
           BookEntry e;
           e.path = fpath;

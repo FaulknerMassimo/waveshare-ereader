@@ -78,9 +78,14 @@ parameter:
 static void EPD_3IN97_ReadBusy(void)
 {
     Debug("e-Paper busy\r\n");
-    DEV_Delay_ms(100);
+    // Busy can assert slightly after the refresh command, so wait for either
+    // assertion-then-release or immediate release if already idle.
+    unsigned long start = millis();
+    while (DEV_Digital_Read(EPD_BUSY_PIN) == 0 && (millis() - start) < 200) {
+        DEV_Delay_ms(1);
+    }
     while(DEV_Digital_Read(EPD_BUSY_PIN) == 1) {      //LOW: idle, HIGH: busy
-        DEV_Delay_ms(10);
+        DEV_Delay_ms(5);
     }
     Debug("e-Paper busy release\r\n");
 }
@@ -92,7 +97,8 @@ parameter:
 static void EPD_3IN97_TurnOnDisplay(void)
 {
     EPD_3IN97_SendCommand(0x22);
-    EPD_3IN97_SendData(0xF7);
+    // Use a lower-flash update sequence to reduce visible full-refresh blinking.
+    EPD_3IN97_SendData(0xD7);
 	EPD_3IN97_SendCommand(0x20);
     EPD_3IN97_ReadBusy();
 }
@@ -100,6 +106,7 @@ static void EPD_3IN97_TurnOnDisplay(void)
 static void EPD_3IN97_TurnOnDisplay_Fast(void)
 {
     EPD_3IN97_SendCommand(0x22);
+    // Known-good fast update sequence for this panel.
     EPD_3IN97_SendData(0xD7);
 	EPD_3IN97_SendCommand(0x20);
     EPD_3IN97_ReadBusy();
@@ -351,7 +358,6 @@ void EPD_3IN97_Display(const UBYTE *Image)
         for (UWORD i = 0; i < Width; i++) {
             EPD_3IN97_SendData(Image[i + j * Width]);
         }
-        DEV_Delay_ms(1);
     }
     EPD_3IN97_TurnOnDisplay();
 }
@@ -367,7 +373,6 @@ void EPD_3IN97_Display_Base(const UBYTE *Image)
         for (UWORD i = 0; i < Width; i++) {
             EPD_3IN97_SendData(Image[i + j * Width]);
         }
-        DEV_Delay_ms(1);
     }
 
     EPD_3IN97_SendCommand(0x26);
@@ -375,7 +380,6 @@ void EPD_3IN97_Display_Base(const UBYTE *Image)
         for (UWORD i = 0; i < Width; i++) {
             EPD_3IN97_SendData(Image[i + j * Width]);
         }
-        DEV_Delay_ms(1);
     }
     EPD_3IN97_TurnOnDisplay();
 }
@@ -391,7 +395,6 @@ void EPD_3IN97_Display_Fast(const UBYTE *Image)
         for (UWORD i = 0; i < Width; i++) {
             EPD_3IN97_SendData(Image[i + j * Width]);
         }
-        DEV_Delay_ms(1);
     }
     EPD_3IN97_TurnOnDisplay_Fast();
 }
@@ -407,7 +410,6 @@ void EPD_3IN97_Display_Fast_Base(const UBYTE *Image)
         for (UWORD i = 0; i < Width; i++) {
             EPD_3IN97_SendData(Image[i + j * Width]);
         }
-        DEV_Delay_ms(1);
     }
 
     EPD_3IN97_SendCommand(0x26);
@@ -415,7 +417,6 @@ void EPD_3IN97_Display_Fast_Base(const UBYTE *Image)
         for (UWORD i = 0; i < Width; i++) {
             EPD_3IN97_SendData(Image[i + j * Width]);
         }
-        DEV_Delay_ms(1);
     }
     EPD_3IN97_TurnOnDisplay_Fast();
 }

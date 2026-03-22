@@ -52,6 +52,8 @@ static AppState g_state = STATE_FILE_LIST;
 static unsigned long g_last_activity = 0;
 static bool g_needs_redraw = true;
 static bool g_menu_epd4_ready = false;
+static bool g_fast_epd_ready = false;
+static bool g_fast_base_synced = false;
 
 static UBYTE *g_image_buffer = nullptr;
 static UBYTE *g_image_buf4 = nullptr;
@@ -138,6 +140,10 @@ void wait_for_loader()
 }
 
 void init_display();
+void ensure_fast_epd();
+void fast_display(const UBYTE *image);
+void handle_file_list_move(bool move_down);
+void open_selected_book();
 void init_sd();
 void handle_buttons();
 void show_cover_and_sleep();
@@ -199,8 +205,7 @@ void setup()
     Paint_SetScale(2);
     Paint_Clear(WHITE);
     Paint_DrawString_EN(280, 220, "Loading...", &Font24, WHITE, BLACK);
-    EPD_3IN97_Init_Fast();
-    EPD_3IN97_Display_Fast(g_image_buffer);
+    fast_display(g_image_buffer);
 
     request_book_load(last_book.c_str());
     while (!g_load_done) { delay(50); }
@@ -273,6 +278,8 @@ void init_display()
   DEV_Module_Init();
   EPD_3IN97_Init();
   EPD_3IN97_Clear();
+  g_fast_epd_ready = false;
+  g_fast_base_synced = false;
   DEV_Delay_ms(500);
 
   UDOUBLE buf1_size = ((EPD_3IN97_WIDTH % 8 == 0) ? (EPD_3IN97_WIDTH / 8) : (EPD_3IN97_WIDTH / 8 + 1)) * EPD_3IN97_HEIGHT;
@@ -300,6 +307,105 @@ void init_display()
   Serial.printf("[DISP] Buffers: 1-bit=%lu B, 4-gray=%lu B\n", (unsigned long)buf1_size, (unsigned long)buf4_size);
 }
 
+void ensure_fast_epd()
+{
+  if (!g_fast_epd_ready)
+  {
+    EPD_3IN97_Init_Fast();
+    g_fast_epd_ready = true;
+    g_fast_base_synced = false;
+  }
+}
+
+void fast_display(const UBYTE *image)
+{
+  ensure_fast_epd();
+  if (!g_fast_base_synced)
+  {
+    // First frame after entering fast mode seeds both RAM planes for stable differential updates.
+    EPD_3IN97_Display_Fast_Base(image);
+    g_fast_base_synced = true;
+  }
+  else
+  {
+    EPD_3IN97_Display_Fast(image);
+  }
+}
+
+void handle_file_list_move(bool move_down)
+{
+  if (g_file_list->empty())
+  {
+    Serial.printf("[BTN] %s ignored (no files)\n", move_down ? "DOWN" : "UP");
+    return;
+  }
+
+  const int old_sel  = g_file_list->selected_index();
+  const int old_page = old_sel / FL_PER_PAGE;
+
+  if (move_down) g_file_list->next();
+  else           g_file_list->prev();
+
+  const int new_sel  = g_file_list->selected_index();
+  const int new_page = new_sel / FL_PER_PAGE;
+
+  if (old_page != new_page || !g_menu_epd4_ready || g_file_list->needs_cover_load())
+  {
+    g_needs_redraw = true;
+    return;
+  }
+
+  g_file_list->update_selection(g_image_buffer, old_sel, new_sel);
+  fast_display(g_image_buffer);
+  g_needs_redraw = false;
+}
+
+void open_selected_book()
+{
+  if (g_file_list->empty())
+  {
+    Serial.println("[BTN] Refreshing file list...");
+    init_sd();
+    g_file_list->scan("/");
+    g_needs_redraw = true;
+    return;
+  }
+
+  const char *path = g_file_list->selected_path();
+  Serial.printf("[BTN] Opening: %s\n", path ? path : "(null)");
+  if (!path) return;
+
+  Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, 0, WHITE);
+  Paint_SetScale(2);
+  Paint_Clear(WHITE);
+  Paint_DrawString_EN(240, 220, "Loading book...", &Font24, WHITE, BLACK);
+  fast_display(g_image_buffer);
+
+  request_book_load(path);
+  while (!g_load_done) { delay(50); }
+
+  if (g_load_success)
+  {
+    Serial.println("[BTN] Book loaded");
+    String key_sect = "sect_" + String(g_file_list->selected_index());
+    String key_page = "page_" + String(g_file_list->selected_index());
+    int sect = g_prefs.getInt(key_sect.c_str(), 0);
+    int page = g_prefs.getInt(key_page.c_str(), 0);
+    g_book_reader->go_to(sect, page);
+    g_prefs.putString("last_book", path);
+    g_state = STATE_READING;
+    g_needs_redraw = true;
+    return;
+  }
+
+  Serial.println("[BTN] Book load failed");
+  Paint_Clear(WHITE);
+  Paint_DrawString_EN(200, 220, "Failed to open book", &Font20, WHITE, BLACK);
+  fast_display(g_image_buffer);
+  delay(2000);
+  g_needs_redraw = true;
+}
+
 void redraw_screen()
 {
   if (g_state == STATE_FILE_LIST)
@@ -315,9 +421,8 @@ void redraw_screen()
 
     g_file_list->render(g_image_buffer, g_power->battery_percent());
 
-    EPD_3IN97_Init_Fast();
+    fast_display(g_image_buffer);
     g_menu_epd4_ready = true;
-    EPD_3IN97_Display_Fast(g_image_buffer);
   }
   else if (g_state == STATE_READING && g_book_reader)
   {
@@ -328,15 +433,75 @@ void redraw_screen()
 
     g_book_reader->render();
 
-    char page_bat[48];
-    snprintf(page_bat, sizeof(page_bat), "  [%d/%d]  Bat:%d%%", g_book_reader->current_page() + 1, g_book_reader->total_pages_in_section(), g_power->battery_percent());
-    Paint_DrawLine(0, EPD_3IN97_HEIGHT - 24, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT - 24, BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
-    WaveshareRenderer::draw_string(8, EPD_3IN97_HEIGHT - 20, g_book_reader->title(), &Font12, WHITE, BLACK);
-    int title_px = strlen(g_book_reader->title()) * Font12.Width + 8;
-    Paint_DrawString_EN(title_px, EPD_3IN97_HEIGHT - 20, page_bat, &Font12, WHITE, BLACK);
+    char page_text[48];
+    snprintf(page_text, sizeof(page_text), "Page %d of %d", g_book_reader->current_page_in_book() + 1, g_book_reader->total_pages_in_book());
 
-    EPD_3IN97_Init_Fast();
-    EPD_3IN97_Display_Fast(g_image_buffer);
+    int bat_pct = g_power->battery_percent();
+    if (bat_pct < 0) bat_pct = 0;
+    if (bat_pct > 100) bat_pct = 100;
+
+    char bat_text[16];
+    snprintf(bat_text, sizeof(bat_text), "%d%%", bat_pct);
+
+    int page_px = strlen(page_text) * Font12.Width;
+    int page_x = std::max(0, (EPD_3IN97_WIDTH - page_px) / 2);
+
+    int bat_px = strlen(bat_text) * Font12.Width;
+    const int icon_w = 16;
+    const int icon_h = 8;
+    const int icon_tip_w = 2;
+    const int icon_gap = 4;
+    const int bat_group_w = icon_w + icon_gap + bat_px;
+    int bat_group_x = std::max(0, EPD_3IN97_WIDTH - 8 - bat_group_w);
+
+    const char *title = g_book_reader->title();
+    const int early_ellipsis_px = Font12.Width * 10;
+    int max_title_px = std::max(0, page_x - 16 - early_ellipsis_px);
+
+    char title_buf[96];
+    title_buf[0] = '\0';
+    if (title && title[0] != '\0' && max_title_px >= Font12.Width)
+    {
+      int max_chars = max_title_px / Font12.Width;
+      int title_len = strlen(title);
+
+      if (title_len <= max_chars)
+      {
+        snprintf(title_buf, sizeof(title_buf), "%s", title);
+      }
+      else if (max_chars >= 4)
+      {
+        int keep = std::min((int)sizeof(title_buf) - 4, max_chars - 3);
+        if (keep > 0)
+        {
+          memcpy(title_buf, title, keep);
+          title_buf[keep] = '\0';
+          strcat(title_buf, "...");
+        }
+      }
+    }
+
+    Paint_DrawLine(0, EPD_3IN97_HEIGHT - 24, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT - 24, BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+    if (title_buf[0] != '\0')
+      WaveshareRenderer::draw_string(8, EPD_3IN97_HEIGHT - 20, title_buf, &Font12, WHITE, BLACK);
+    Paint_DrawString_EN(page_x, EPD_3IN97_HEIGHT - 20, page_text, &Font12, WHITE, BLACK);
+
+    int icon_x = bat_group_x;
+    int icon_y = EPD_3IN97_HEIGHT - 18;
+    int body_x2 = icon_x + icon_w;
+    int body_y2 = icon_y + icon_h;
+    Paint_DrawRectangle(icon_x, icon_y, body_x2, body_y2, BLACK, DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
+    int tip_y = icon_y + (icon_h / 2) - 2;
+    Paint_DrawRectangle(body_x2 + 1, tip_y, body_x2 + icon_tip_w, tip_y + 3, BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+
+    int inner_w = icon_w - 2;
+    int fill_w = (inner_w * bat_pct) / 100;
+    if (fill_w > 0)
+      Paint_DrawRectangle(icon_x + 1, icon_y + 1, icon_x + fill_w, body_y2 - 1, BLACK, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+
+    Paint_DrawString_EN(bat_group_x + icon_w + icon_gap, EPD_3IN97_HEIGHT - 20, bat_text, &Font12, WHITE, BLACK);
+
+    fast_display(g_image_buffer);
   }
 }
 
@@ -360,21 +525,7 @@ void handle_buttons()
       g_last_activity = millis();
       if (g_state == STATE_FILE_LIST)
       {
-        const int old_sel  = g_file_list->selected_index();
-        const int old_page = old_sel / FL_PER_PAGE;
-
-        g_file_list->prev();
-        const int new_sel  = g_file_list->selected_index();
-        const int new_page = new_sel / FL_PER_PAGE;
-
-        if (old_page != new_page || !g_menu_epd4_ready || g_file_list->needs_cover_load())
-          g_needs_redraw = true;
-        else
-        {
-          g_file_list->update_selection(g_image_buffer, old_sel, new_sel);
-          EPD_3IN97_Display_Fast(g_image_buffer);
-          g_needs_redraw = false;
-        }
+        handle_file_list_move(false);
       }
       else if (g_state == STATE_READING && g_book_reader)
       {
@@ -396,21 +547,7 @@ void handle_buttons()
       g_last_activity = millis();
       if (g_state == STATE_FILE_LIST)
       {
-        const int old_sel  = g_file_list->selected_index();
-        const int old_page = old_sel / FL_PER_PAGE;
-
-        g_file_list->next();
-        const int new_sel  = g_file_list->selected_index();
-        const int new_page = new_sel / FL_PER_PAGE;
-
-        if (old_page != new_page || !g_menu_epd4_ready || g_file_list->needs_cover_load())
-          g_needs_redraw = true;
-        else
-        {
-          g_file_list->update_selection(g_image_buffer, old_sel, new_sel);
-          EPD_3IN97_Display_Fast(g_image_buffer);
-          g_needs_redraw = false;
-        }
+        handle_file_list_move(true);
       }
       else if (g_state == STATE_READING && g_book_reader)
       {
@@ -440,43 +577,7 @@ void handle_buttons()
       }
       else if (g_state == STATE_FILE_LIST)
       {
-        const char *path = g_file_list->selected_path();
-        Serial.printf("[BTN] Opening: %s\n", path ? path : "(null)");
-        if (path)
-        {
-          Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, 0, WHITE);
-          Paint_SetScale(2);
-          Paint_Clear(WHITE);
-          Paint_DrawString_EN(240, 220, "Loading book...", &Font24, WHITE, BLACK);
-          EPD_3IN97_Init_Fast();
-          EPD_3IN97_Display_Fast(g_image_buffer);
-
-          request_book_load(path);
-          while (!g_load_done) { delay(50); }
-
-          if (g_load_success)
-          {
-            Serial.println("[BTN] Book loaded");
-            String key_sect = "sect_" + String(g_file_list->selected_index());
-            String key_page = "page_" + String(g_file_list->selected_index());
-            int sect = g_prefs.getInt(key_sect.c_str(), 0);
-            int page = g_prefs.getInt(key_page.c_str(), 0);
-            g_book_reader->go_to(sect, page);
-            g_prefs.putString("last_book", path);
-            g_state = STATE_READING;
-            g_needs_redraw = true;
-          }
-          else
-          {
-            Serial.println("[BTN] Book load failed");
-            Paint_Clear(WHITE);
-            Paint_DrawString_EN(200, 220, "Failed to open book", &Font20, WHITE, BLACK);
-            EPD_3IN97_Init_Fast();
-            EPD_3IN97_Display_Fast(g_image_buffer);
-            delay(2000);
-            g_needs_redraw = true;
-          }
-        }
+        open_selected_book();
       }
     }
   }
@@ -557,6 +658,8 @@ void show_cover_and_sleep()
         WaveshareRenderer::draw_string(tx, cy + COVER_H + 10, t, &Font16, GRAY1, GRAY4);
 
         EPD_3IN97_Init_4GRAY();
+        g_fast_epd_ready = false;
+        g_fast_base_synced = false;
         EPD_3IN97_Display_4Gray(g_image_buf4);
         cover_shown = true;
       }
@@ -569,8 +672,7 @@ void show_cover_and_sleep()
     Paint_SetScale(2);
     Paint_Clear(WHITE);
     Paint_DrawString_EN(280, 200, "Sleeping...", &Font24, WHITE, BLACK);
-    EPD_3IN97_Init();
-    EPD_3IN97_Display(g_image_buffer);
+    fast_display(g_image_buffer);
   }
 
   EPD_3IN97_Sleep();

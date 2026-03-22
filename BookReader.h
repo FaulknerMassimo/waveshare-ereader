@@ -346,6 +346,19 @@ public:
   int current_section() const { return m_current_section; }
   int current_page() const { return m_current_page; }
   int total_pages_in_section() const { return (int)m_pages.size(); }
+  int current_page_in_book()
+  {
+    ensure_book_pagination();
+    int page = 0;
+    for (int i = 0; i < m_current_section; i++)
+      page += get_or_compute_section_page_count(i);
+    return page + m_current_page;
+  }
+  int total_pages_in_book()
+  {
+    ensure_book_pagination();
+    return std::max(1, m_total_pages_in_book);
+  }
   int num_sections() const { return m_num_sections; }
   const char *title() const { return m_title.c_str(); }
   const char *path() const { return m_path.c_str(); }
@@ -367,6 +380,9 @@ private:
 
   std::vector<std::string> m_txt_sections;
   bool m_is_txt = false;
+  std::vector<int> m_section_page_counts;
+  int m_total_pages_in_book = 0;
+  bool m_book_pagination_ready = false;
 
   void load_current_section()
   {
@@ -415,6 +431,9 @@ private:
 
     if (m_txt_sections.empty()) return false;
     m_num_sections = (int)m_txt_sections.size();
+    m_section_page_counts.assign(m_num_sections, -1);
+    m_total_pages_in_book = 0;
+    m_book_pagination_ready = false;
     load_current_section();
     build_pages_for_current_section();
     return true;
@@ -439,6 +458,9 @@ private:
       if (book_cache_read_index(m_path.c_str(), m_section_index, m_title))
       {
         m_num_sections = (int)m_section_index.size();
+        m_section_page_counts.assign(m_num_sections, -1);
+        m_total_pages_in_book = 0;
+        m_book_pagination_ready = false;
         m_header_size  = 16 + (uint32_t)m_title.size() + m_num_sections * 8;
         load_current_section();
         build_pages_for_current_section();
@@ -482,6 +504,9 @@ private:
     }
 
     m_num_sections = (int)m_section_index.size();
+    m_section_page_counts.assign(m_num_sections, -1);
+    m_total_pages_in_book = 0;
+    m_book_pagination_ready = false;
     m_header_size  = 16 + (uint32_t)m_title.size() + m_num_sections * 8;
     load_current_section();
     build_pages_for_current_section();
@@ -643,6 +668,74 @@ private:
 
     if (m_pages.empty())
       m_pages.push_back(Page{});
+
+    if (m_current_section >= 0 && m_current_section < (int)m_section_page_counts.size())
+    {
+      int pages_now = (int)m_pages.size();
+      if (m_section_page_counts[m_current_section] != pages_now)
+        m_book_pagination_ready = false;
+      m_section_page_counts[m_current_section] = pages_now;
+    }
+  }
+
+  int compute_page_count_from_text(const std::string &text)
+  {
+    if (text.empty()) return 1;
+
+    int page_h = m_renderer->get_page_height();
+    int line_h = m_renderer->get_line_height();
+    int max_lines = std::max(1, page_h / line_h);
+    int page_w = m_renderer->get_page_width();
+
+    std::vector<std::string> all_lines = word_wrap(text, page_w);
+    if (all_lines.empty()) return 1;
+
+    return std::max(1, (int)((all_lines.size() + max_lines - 1) / max_lines));
+  }
+
+  int get_or_compute_section_page_count(int section)
+  {
+    if (section < 0 || section >= m_num_sections) return 0;
+    if (section >= (int)m_section_page_counts.size()) return 0;
+
+    int cached = m_section_page_counts[section];
+    if (cached > 0) return cached;
+
+    if (section == m_current_section && !m_pages.empty())
+    {
+      m_section_page_counts[section] = (int)m_pages.size();
+      return m_section_page_counts[section];
+    }
+
+    std::string section_text;
+    if (m_is_txt)
+    {
+      if (section < (int)m_txt_sections.size())
+        section_text = m_txt_sections[section];
+    }
+    else
+    {
+      if (section < (int)m_section_index.size())
+        section_text = book_cache_read_section(m_path.c_str(), m_header_size, m_section_index[section]);
+    }
+
+    int pages = compute_page_count_from_text(section_text);
+    m_section_page_counts[section] = pages;
+    return pages;
+  }
+
+  void ensure_book_pagination()
+  {
+    if (m_book_pagination_ready) return;
+
+    m_total_pages_in_book = 0;
+    for (int i = 0; i < m_num_sections; i++)
+      m_total_pages_in_book += get_or_compute_section_page_count(i);
+
+    if (m_total_pages_in_book <= 0)
+      m_total_pages_in_book = std::max(1, (int)m_pages.size());
+
+    m_book_pagination_ready = true;
   }
 
   std::vector<std::string> word_wrap(const std::string &text, int max_width)
