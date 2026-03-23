@@ -18,6 +18,7 @@ struct JpegCtx {
 	const uint8_t *data; size_t size; size_t pos;
 	uint8_t *out;
 	int src_w, src_h, tgt_w, tgt_h;
+	int stride;
 };
 
 static size_t cl_in(JDEC *jd, uint8_t *buf, size_t n) {
@@ -42,7 +43,7 @@ static int cl_out(JDEC *jd, void *bmp, JRECT *r) {
 			if (dx < 0 || dx >= c->tgt_w) continue;
 			uint8_t lum = (uint8_t)((rv*77u + gv*150u + bv*29u) >> 8);
 			uint8_t pv = (lum >= 192) ? 3 : (lum >= 128) ? 2 : (lum >= 64) ? 1 : 0;
-			int bi = dy * COVER_STRIDE + dx/4;
+			int bi = dy * c->stride + dx/4;
 			int sh = 6 - (dx%4)*2;
 			c->out[bi] = (c->out[bi] & ~(3<<sh)) | (pv<<sh);
 		}
@@ -53,6 +54,10 @@ static int cl_out(JDEC *jd, void *bmp, JRECT *r) {
 class CoverLoader {
 public:
 	static uint8_t *load(const char *epub_path) {
+		return load_scaled(epub_path, COVER_W, COVER_H);
+	}
+
+	static uint8_t *load_scaled(const char *epub_path, int target_w, int target_h) {
 		File f = SD_MMC.open(epub_path);
 		if (!f) return nullptr;
 		mz_zip_archive zip; memset(&zip,0,sizeof(zip));
@@ -63,7 +68,7 @@ public:
 		size_t isz; uint8_t *img = (uint8_t*)extract(&zip, cp.c_str(), &isz);
 		mz_zip_reader_end(&zip); f.close();
 		if (!img) return nullptr;
-		uint8_t *result = decode(img, isz);
+		uint8_t *result = decode(img, isz, target_w, target_h);
 		free(img); return result;
 	}
 
@@ -121,17 +126,20 @@ private:
 		}
 		return "";
 	}
-	static uint8_t *decode(const uint8_t *data, size_t size) {
-		uint8_t *buf=(uint8_t*)heap_caps_malloc(COVER_BUF_SZ,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
-		if(!buf) buf=(uint8_t*)malloc(COVER_BUF_SZ);
+	static uint8_t *decode(const uint8_t *data, size_t size, int target_w, int target_h) {
+		if (target_w < 1 || target_h < 1) return nullptr;
+		int target_stride = (target_w + 3) / 4;
+		size_t buf_sz = (size_t)target_stride * (size_t)target_h;
+		uint8_t *buf=(uint8_t*)heap_caps_malloc(buf_sz,MALLOC_CAP_SPIRAM|MALLOC_CAP_8BIT);
+		if(!buf) buf=(uint8_t*)malloc(buf_sz);
 		if(!buf) return nullptr;
-		memset(buf,0xFF,COVER_BUF_SZ);
+		memset(buf,0xFF,buf_sz);
 		void *pool=malloc(4096); if(!pool){free(buf);return nullptr;}
-		JpegCtx ctx={data,size,0,buf,0,0,COVER_W,COVER_H};
+		JpegCtx ctx={data,size,0,buf,0,0,target_w,target_h,target_stride};
 		JDEC jd;
 		if(jd_prepare(&jd,cl_in,pool,4096,&ctx)!=JDR_OK){free(pool);free(buf);return nullptr;}
 		uint8_t scale=0;
-		while(scale<3&&(jd.width>>(scale+1))>=COVER_W&&(jd.height>>(scale+1))>=COVER_H) scale++;
+		while(scale<3&&(jd.width>>(scale+1))>=target_w&&(jd.height>>(scale+1))>=target_h) scale++;
 		ctx.src_w = (jd.width  >> scale);
 		ctx.src_h = (jd.height >> scale);
 		if (ctx.src_w < 1) ctx.src_w = 1;

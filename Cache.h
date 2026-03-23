@@ -8,6 +8,11 @@
 #define CACHE_DIR "/.ereader"
 #define CACHE_MAGIC 0x42484B43u
 
+#define SLEEP_COVER_W 464
+#define SLEEP_COVER_H 533
+#define SLEEP_COVER_STRIDE ((SLEEP_COVER_W + 3) / 4)
+#define SLEEP_COVER_BUF_SZ (SLEEP_COVER_STRIDE * SLEEP_COVER_H)
+
 static uint32_t cache_hash(const char *s)
 {
 	uint32_t h = 5381;
@@ -46,6 +51,24 @@ static uint8_t *cover_cache_load(const char *epub_path)
 	return buf;
 }
 
+static uint8_t *sleep_cover_cache_load(const char *epub_path)
+{
+	std::string cp = cache_path(epub_path, ".slp");
+	File f = SD_MMC.open(cp.c_str(), FILE_READ);
+	if (!f) return nullptr;
+	if ((size_t)f.size() != SLEEP_COVER_BUF_SZ) { f.close(); return nullptr; }
+
+	uint8_t *buf = (uint8_t *)heap_caps_malloc(SLEEP_COVER_BUF_SZ, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+	if (!buf) buf = (uint8_t *)malloc(SLEEP_COVER_BUF_SZ);
+	if (!buf) { f.close(); return nullptr; }
+
+	size_t rd = f.read(buf, SLEEP_COVER_BUF_SZ);
+	f.close();
+	if (rd != SLEEP_COVER_BUF_SZ) { free(buf); return nullptr; }
+	Serial.printf("[CACHE] Sleep cover loaded from cache: %s\n", cp.c_str());
+	return buf;
+}
+
 static bool cover_cache_save(const char *epub_path, const uint8_t *buf)
 {
 	ensure_cache_dir();
@@ -58,6 +81,18 @@ static bool cover_cache_save(const char *epub_path, const uint8_t *buf)
 	return written == COVER_BUF_SZ;
 }
 
+static bool sleep_cover_cache_save(const char *epub_path, const uint8_t *buf)
+{
+	ensure_cache_dir();
+	std::string cp = cache_path(epub_path, ".slp");
+	File f = SD_MMC.open(cp.c_str(), FILE_WRITE);
+	if (!f) return false;
+	size_t written = f.write(buf, SLEEP_COVER_BUF_SZ);
+	f.close();
+	Serial.printf("[CACHE] Sleep cover saved: %s (%u bytes)\n", cp.c_str(), written);
+	return written == SLEEP_COVER_BUF_SZ;
+}
+
 static uint8_t *cover_load_cached(const char *epub_path)
 {
 	uint8_t *buf = cover_cache_load(epub_path);
@@ -67,6 +102,18 @@ static uint8_t *cover_load_cached(const char *epub_path)
 	if (!buf) return nullptr;
 
 	cover_cache_save(epub_path, buf);
+	return buf;
+}
+
+static uint8_t *cover_load_sleep_cached(const char *epub_path)
+{
+	uint8_t *buf = sleep_cover_cache_load(epub_path);
+	if (buf) return buf;
+
+	buf = CoverLoader::load_scaled(epub_path, SLEEP_COVER_W, SLEEP_COVER_H);
+	if (!buf) return nullptr;
+
+	sleep_cover_cache_save(epub_path, buf);
 	return buf;
 }
 

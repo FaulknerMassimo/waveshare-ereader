@@ -51,7 +51,6 @@ public:
 	{
 		uint8_t hi = read_reg(AXP2101_REG_VBAT_H);
 		uint8_t lo = read_reg(AXP2101_REG_VBAT_L);
-		// 14-bit value, LSB = 1.1 mV
 		uint16_t raw = ((uint16_t)(hi & 0x3F) << 8) | lo;
 		return (int)(raw * 1.1f);
 	}
@@ -63,8 +62,8 @@ public:
 
 private:
 	TwoWire &m_wire;
-	int      m_irq_pin;
-	int      m_battery_percent;
+	int m_irq_pin;
+	int m_battery_percent;
 
 	uint8_t read_reg(uint8_t reg)
 	{

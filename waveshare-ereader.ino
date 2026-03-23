@@ -132,7 +132,7 @@ void background_task(void *param)
 		{
 			Serial.println("[LOADER] Loading sleep cover...");
 			if (g_sleep_cover_buf) { free(g_sleep_cover_buf); g_sleep_cover_buf = nullptr; }
-			g_sleep_cover_buf = cover_load_cached(g_load_path);
+			g_sleep_cover_buf = cover_load_sleep_cached(g_load_path);
 			g_load_success = (g_sleep_cover_buf != nullptr);
 			Serial.printf("[LOADER] Sleep cover %s\n", g_load_success ? "OK" : "FAILED");
 		}
@@ -648,20 +648,35 @@ void show_cover_and_sleep()
 			{
 				memset(g_image_buf4, 0xFF, (EPD_3IN97_WIDTH / 4) * EPD_3IN97_HEIGHT);
 
-				int cx = (EPD_3IN97_WIDTH  - COVER_W) / 2;
-				int cy = (EPD_3IN97_HEIGHT - COVER_H) / 2 - 20;
+				const int sleep_margin = 8;
+				int target_h = EPD_3IN97_HEIGHT - (sleep_margin * 2);
+				int target_w = (SLEEP_COVER_W * target_h) / SLEEP_COVER_H;
+				if (target_w > (EPD_3IN97_WIDTH - (sleep_margin * 2)))
+				{
+					target_w = EPD_3IN97_WIDTH - (sleep_margin * 2);
+					target_h = (SLEEP_COVER_H * target_w) / SLEEP_COVER_W;
+				}
+				if (target_w < 1) target_w = 1;
+				if (target_h < 1) target_h = 1;
+
+				int cx = (EPD_3IN97_WIDTH  - target_w) / 2;
+				int cy = (EPD_3IN97_HEIGHT - target_h) / 2;
 
 				int fb_stride = EPD_3IN97_WIDTH / 4;
-				for (int y = 0; y < COVER_H; y++)
+				for (int y = 0; y < target_h; y++)
 				{
 					int fy = cy + y;
 					if (fy < 0 || fy >= EPD_3IN97_HEIGHT) continue;
-					for (int x = 0; x < COVER_W; x++)
+					int sy = (y * SLEEP_COVER_H) / target_h;
+					if (sy >= SLEEP_COVER_H) sy = SLEEP_COVER_H - 1;
+					for (int x = 0; x < target_w; x++)
 					{
 						int fx = cx + x;
 						if (fx < 0 || fx >= EPD_3IN97_WIDTH) continue;
-						int src_byte  = y * COVER_STRIDE + x / 4;
-						int src_shift = 6 - (x % 4) * 2;
+						int sx = (x * SLEEP_COVER_W) / target_w;
+						if (sx >= SLEEP_COVER_W) sx = SLEEP_COVER_W - 1;
+						int src_byte  = sy * SLEEP_COVER_STRIDE + sx / 4;
+						int src_shift = 6 - (sx % 4) * 2;
 						uint8_t g4    = (cover[src_byte] >> src_shift) & 0x03;
 						int dst_byte  = fy * fb_stride + fx / 4;
 						int dst_shift = 6 - (fx % 4) * 2;
@@ -670,13 +685,6 @@ void show_cover_and_sleep()
 					}
 				}
 				free(cover);
-
-				Paint_NewImage(g_image_buf4, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, 0, GRAY1);
-				Paint_SetScale(4);
-				const char *t = g_book_reader->title();
-				int tw = strlen(t) * Font16.Width;
-				int tx = std::max(8, (EPD_3IN97_WIDTH - tw) / 2);
-				WaveshareRenderer::draw_string(tx, cy + COVER_H + 10, t, &Font16, GRAY1, GRAY4);
 
 				EPD_3IN97_Init_4GRAY();
 				g_fast_epd_ready = false;
