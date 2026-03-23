@@ -206,23 +206,15 @@ void setup()
 	g_renderer = new WaveshareRenderer(g_image_buffer);
 	WaveshareRenderer::set_body_font(reader_font_from_size());
 	g_load_sem = xSemaphoreCreateBinary();
-	xTaskCreatePinnedToCore(
-		background_task,
-		"bg_loader",
-		32768,
-		nullptr,
-		1,
-		nullptr,
-		0
-	);
+	xTaskCreatePinnedToCore(background_task, "bg_loader", 32768, nullptr, 1, nullptr, 0);
 
 	g_file_list = new FileList();
 	g_file_list->scan("/");
 
 	g_prefs.begin("ereader", false);
 	String last_book = g_prefs.getString("last_book", "");
-	int    last_sect = g_prefs.getInt("last_sect", 0);
-	int    last_page = g_prefs.getInt("last_page", 0);
+	int last_sect = g_prefs.getInt("last_sect", 0);
+	int last_page = g_prefs.getInt("last_page", 0);
 
 	if (last_book.length() > 0 && g_file_list->find(last_book.c_str()))
 	{
@@ -368,9 +360,9 @@ void handle_file_list_move(bool move_down)
 	const int old_page = old_sel / FL_PER_PAGE;
 
 	if (move_down) g_file_list->next();
-	else           g_file_list->prev();
+	else g_file_list->prev();
 
-	const int new_sel  = g_file_list->selected_index();
+	const int new_sel = g_file_list->selected_index();
 	const int new_page = new_sel / FL_PER_PAGE;
 
 	if (old_page != new_page || !g_menu_epd4_ready || g_file_list->needs_cover_load())

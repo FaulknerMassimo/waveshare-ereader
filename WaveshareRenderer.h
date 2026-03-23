@@ -296,15 +296,15 @@ public:
 		draw_text(x + 8, y + h / 2 - 8, "[img]");
 	}
 
-	void clear_screen()   { Paint_Clear(WHITE); }
-	void flush_display()  { EPD_3IN97_Init_Fast(); EPD_3IN97_Display_Fast(m_buf); }
+	void clear_screen() { Paint_Clear(WHITE); }
+	void flush_display() { EPD_3IN97_Init_Fast(); EPD_3IN97_Display_Fast(m_buf); }
 
-	int get_page_width()  { return PAGE_W - MARGIN_X * 2; }
+	int get_page_width() { return PAGE_W - MARGIN_X * 2; }
 	int get_page_height() { return EPD_3IN97_HEIGHT - footer_height() - MARGIN_Y * 2; }
 	int get_space_width() { return body_font()->Width; }
 	int get_line_height() { return body_font()->Height + body_line_spacing(); }
-	int margin_left()     { return MARGIN_X; }
-	int margin_top()      { return MARGIN_Y; }
+	int margin_left() { return MARGIN_X; }
+	int margin_top() { return MARGIN_Y; }
 
 	static void set_body_font(const sFONT *font)
 	{

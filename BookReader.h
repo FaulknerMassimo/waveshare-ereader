@@ -429,7 +429,7 @@ private:
 		}
 		free(buf);
 
-		if (m_txt_sections.empty()) return false;
+	  if (m_txt_sections.empty()) return false;
 		m_num_sections = (int)m_txt_sections.size();
 		m_section_page_counts.assign(m_num_sections, -1);
 		m_total_pages_in_book = 0;
