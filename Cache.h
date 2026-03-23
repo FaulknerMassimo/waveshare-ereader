@@ -12,6 +12,7 @@
 #define SLEEP_COVER_H 533
 #define SLEEP_COVER_STRIDE ((SLEEP_COVER_W + 3) / 4)
 #define SLEEP_COVER_BUF_SZ (SLEEP_COVER_STRIDE * SLEEP_COVER_H)
+#define SLEEP_COVER_CACHE_EXT ".slp2"
 
 static uint32_t cache_hash(const char *s)
 {
@@ -53,7 +54,7 @@ static uint8_t *cover_cache_load(const char *epub_path)
 
 static uint8_t *sleep_cover_cache_load(const char *epub_path)
 {
-	std::string cp = cache_path(epub_path, ".slp");
+	std::string cp = cache_path(epub_path, SLEEP_COVER_CACHE_EXT);
 	File f = SD_MMC.open(cp.c_str(), FILE_READ);
 	if (!f) return nullptr;
 	if ((size_t)f.size() != SLEEP_COVER_BUF_SZ) { f.close(); return nullptr; }
@@ -84,7 +85,7 @@ static bool cover_cache_save(const char *epub_path, const uint8_t *buf)
 static bool sleep_cover_cache_save(const char *epub_path, const uint8_t *buf)
 {
 	ensure_cache_dir();
-	std::string cp = cache_path(epub_path, ".slp");
+	std::string cp = cache_path(epub_path, SLEEP_COVER_CACHE_EXT);
 	File f = SD_MMC.open(cp.c_str(), FILE_WRITE);
 	if (!f) return false;
 	size_t written = f.write(buf, SLEEP_COVER_BUF_SZ);

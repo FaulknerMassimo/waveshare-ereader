@@ -209,9 +209,30 @@ static const uint8_t Font16_Latin_Table[] =
 class WaveshareRenderer
 {
 public:
-	static const int PAGE_W = EPD_3IN97_WIDTH;
 	static const int MARGIN_X = 16;
 	static const int MARGIN_Y = 8;
+
+	static void configure_display(int width, int height, UWORD rotation)
+	{
+		display_width_ref() = width;
+		display_height_ref() = height;
+		display_rotation_ref() = rotation;
+	}
+
+	static int display_width()
+	{
+		return display_width_ref();
+	}
+
+	static int display_height()
+	{
+		return display_height_ref();
+	}
+
+	static UWORD display_rotation()
+	{
+		return display_rotation_ref();
+	}
 
 	WaveshareRenderer(UBYTE *frame_buffer)
 		: m_buf(frame_buffer) {}
@@ -299,8 +320,8 @@ public:
 	void clear_screen() { Paint_Clear(WHITE); }
 	void flush_display() { EPD_3IN97_Init_Fast(); EPD_3IN97_Display_Fast(m_buf); }
 
-	int get_page_width() { return PAGE_W - MARGIN_X * 2; }
-	int get_page_height() { return EPD_3IN97_HEIGHT - footer_height() - MARGIN_Y * 2; }
+	int get_page_width() { return display_width() - MARGIN_X * 2; }
+	int get_page_height() { return display_height() - footer_height() - MARGIN_Y * 2; }
 	int get_space_width() { return body_font()->Width; }
 	int get_line_height() { return body_font()->Height + body_line_spacing(); }
 	int margin_left() { return MARGIN_X; }
@@ -357,6 +378,24 @@ public:
 
 private:
 	UBYTE *m_buf;
+
+	static int &display_width_ref()
+	{
+		static int width = EPD_3IN97_WIDTH;
+		return width;
+	}
+
+	static int &display_height_ref()
+	{
+		static int height = EPD_3IN97_HEIGHT;
+		return height;
+	}
+
+	static UWORD &display_rotation_ref()
+	{
+		static UWORD rotation = ROTATE_0;
+		return rotation;
+	}
 
 	static const sFONT *&body_font_ref()
 	{

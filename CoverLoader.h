@@ -38,14 +38,20 @@ static int cl_out(JDEC *jd, void *bmp, JRECT *r) {
 		if (dy < 0 || dy >= c->tgt_h) { px += bw*3; continue; }
 		for (int col = 0; col < bw; col++) {
 			int sx = r->left + col;
-			int dx = (int)((long)sx * c->tgt_w / c->src_w);
+			int dx0 = (int)((long)sx * c->tgt_w / c->src_w);
+			int dx1 = (int)((long)(sx + 1) * c->tgt_w / c->src_w) - 1;
+			if (dx1 < dx0) dx1 = dx0;
 			uint8_t rv=px[0], gv=px[1], bv=px[2]; px+=3;
-			if (dx < 0 || dx >= c->tgt_w) continue;
+			if (dx1 < 0 || dx0 >= c->tgt_w) continue;
+			if (dx0 < 0) dx0 = 0;
+			if (dx1 >= c->tgt_w) dx1 = c->tgt_w - 1;
 			uint8_t lum = (uint8_t)((rv*77u + gv*150u + bv*29u) >> 8);
 			uint8_t pv = (lum >= 192) ? 3 : (lum >= 128) ? 2 : (lum >= 64) ? 1 : 0;
-			int bi = dy * c->stride + dx/4;
-			int sh = 6 - (dx%4)*2;
-			c->out[bi] = (c->out[bi] & ~(3<<sh)) | (pv<<sh);
+			for (int dx = dx0; dx <= dx1; dx++) {
+				int bi = dy * c->stride + dx/4;
+				int sh = 6 - (dx%4)*2;
+				c->out[bi] = (c->out[bi] & ~(3<<sh)) | (pv<<sh);
+			}
 		}
 	}
 	return 1;

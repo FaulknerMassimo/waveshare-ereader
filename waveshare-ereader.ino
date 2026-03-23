@@ -26,6 +26,20 @@ static const char *TAG = "MAIN";
 
 // Reader body font size. Supported values: 8, 12, 16, 17, 18, 20, 24
 #define READER_FONT_SIZE 17
+// Display orientation. Supported values: 0, 90, 180, 270
+#define DISPLAY_ORIENTATION_DEGREES 270
+
+#if (DISPLAY_ORIENTATION_DEGREES == 0)
+#define DISPLAY_ROTATION ROTATE_0
+#elif (DISPLAY_ORIENTATION_DEGREES == 90)
+#define DISPLAY_ROTATION ROTATE_90
+#elif (DISPLAY_ORIENTATION_DEGREES == 180)
+#define DISPLAY_ROTATION ROTATE_180
+#elif (DISPLAY_ORIENTATION_DEGREES == 270)
+#define DISPLAY_ROTATION ROTATE_270
+#else
+#error "DISPLAY_ORIENTATION_DEGREES must be one of: 0, 90, 180, 270"
+#endif
 
 #define BTN_UP 4
 #define BTN_SELECT 5
@@ -57,6 +71,13 @@ static bool g_needs_redraw = true;
 static bool g_menu_epd4_ready = false;
 static bool g_fast_epd_ready = false;
 static bool g_fast_base_synced = false;
+static const UWORD g_display_rotation = DISPLAY_ROTATION;
+static const int g_display_width = (DISPLAY_ORIENTATION_DEGREES == 90 || DISPLAY_ORIENTATION_DEGREES == 270)
+	? EPD_3IN97_HEIGHT
+	: EPD_3IN97_WIDTH;
+static const int g_display_height = (DISPLAY_ORIENTATION_DEGREES == 90 || DISPLAY_ORIENTATION_DEGREES == 270)
+	? EPD_3IN97_WIDTH
+	: EPD_3IN97_HEIGHT;
 
 static UBYTE *g_image_buffer = nullptr;
 static UBYTE *g_image_buf4 = nullptr;
@@ -176,6 +197,32 @@ void save_reading_progress();
 void request_book_load(const char *path);
 void request_cover_load();
 void wait_for_loader();
+bool map_logical_to_physical(int logical_x, int logical_y, int &phys_x, int &phys_y);
+
+bool map_logical_to_physical(int logical_x, int logical_y, int &phys_x, int &phys_y)
+{
+	switch (g_display_rotation)
+	{
+	case ROTATE_0:
+		phys_x = logical_x;
+		phys_y = logical_y;
+		return true;
+	case ROTATE_90:
+		phys_x = EPD_3IN97_WIDTH - logical_y - 1;
+		phys_y = logical_x;
+		return true;
+	case ROTATE_180:
+		phys_x = EPD_3IN97_WIDTH - logical_x - 1;
+		phys_y = EPD_3IN97_HEIGHT - logical_y - 1;
+		return true;
+	case ROTATE_270:
+		phys_x = logical_y;
+		phys_y = EPD_3IN97_HEIGHT - logical_x - 1;
+		return true;
+	default:
+		return false;
+	}
+}
 
 void setup()
 {
@@ -203,6 +250,7 @@ void setup()
 	init_sd();
 	init_display();
 
+	WaveshareRenderer::configure_display(g_display_width, g_display_height, g_display_rotation);
 	g_renderer = new WaveshareRenderer(g_image_buffer);
 	WaveshareRenderer::set_body_font(reader_font_from_size());
 	g_load_sem = xSemaphoreCreateBinary();
@@ -215,13 +263,14 @@ void setup()
 	String last_book = g_prefs.getString("last_book", "");
 	int last_sect = g_prefs.getInt("last_sect", 0);
 	int last_page = g_prefs.getInt("last_page", 0);
+	uint32_t last_off = g_prefs.getULong("last_off", 0);
 
 	if (last_book.length() > 0 && g_file_list->find(last_book.c_str()))
 	{
-		Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, 0, WHITE);
+		Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, g_display_rotation, WHITE);
 		Paint_SetScale(2);
 		Paint_Clear(WHITE);
-		Paint_DrawString_EN(280, 220, "Loading...", &Font24, WHITE, BLACK);
+		Paint_DrawString_EN(std::max(8, (g_display_width - ((int)strlen("Loading...") * Font24.Width)) / 2), std::max(0, (g_display_height - Font24.Height) / 2), "Loading...", &Font24, WHITE, BLACK);
 		fast_display(g_image_buffer);
 
 		request_book_load(last_book.c_str());
@@ -229,7 +278,10 @@ void setup()
 
 		if (g_load_success)
 		{
-			g_book_reader->go_to(last_sect, last_page);
+			if (last_off > 0)
+				g_book_reader->go_to_global_char_offset(last_off);
+			else
+				g_book_reader->go_to(last_sect, last_page);
 			g_state = STATE_READING;
 		}
 	}
@@ -318,7 +370,7 @@ void init_display()
 		while (1) { delay(1000); }
 	}
 
-	Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, 0, WHITE);
+	Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, g_display_rotation, WHITE);
 	Paint_SetScale(2);
 	Paint_Clear(WHITE);
 	Serial.printf("[DISP] Buffers: 1-bit=%lu B, 4-gray=%lu B\n", (unsigned long)buf1_size, (unsigned long)buf4_size);
@@ -357,13 +409,14 @@ void handle_file_list_move(bool move_down)
 	}
 
 	const int old_sel  = g_file_list->selected_index();
-	const int old_page = old_sel / FL_PER_PAGE;
+	const int per_page = std::max(1, g_file_list->items_per_page());
+	const int old_page = old_sel / per_page;
 
 	if (move_down) g_file_list->next();
 	else g_file_list->prev();
 
 	const int new_sel = g_file_list->selected_index();
-	const int new_page = new_sel / FL_PER_PAGE;
+	const int new_page = new_sel / per_page;
 
 	if (old_page != new_page || !g_menu_epd4_ready || g_file_list->needs_cover_load())
 	{
@@ -391,10 +444,10 @@ void open_selected_book()
 	Serial.printf("[BTN] Opening: %s\n", path ? path : "(null)");
 	if (!path) return;
 
-	Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, 0, WHITE);
+	Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, g_display_rotation, WHITE);
 	Paint_SetScale(2);
 	Paint_Clear(WHITE);
-	Paint_DrawString_EN(240, 220, "Loading book...", &Font24, WHITE, BLACK);
+	Paint_DrawString_EN(std::max(8, (g_display_width - ((int)strlen("Loading book...") * Font24.Width)) / 2), std::max(0, (g_display_height - Font24.Height) / 2), "Loading book...", &Font24, WHITE, BLACK);
 	fast_display(g_image_buffer);
 
 	request_book_load(path);
@@ -405,9 +458,14 @@ void open_selected_book()
 		Serial.println("[BTN] Book loaded");
 		String key_sect = "sect_" + String(g_file_list->selected_index());
 		String key_page = "page_" + String(g_file_list->selected_index());
+		String key_off  = "off_"  + String(g_file_list->selected_index());
 		int sect = g_prefs.getInt(key_sect.c_str(), 0);
 		int page = g_prefs.getInt(key_page.c_str(), 0);
-		g_book_reader->go_to(sect, page);
+		uint32_t off = g_prefs.getULong(key_off.c_str(), 0);
+		if (off > 0)
+			g_book_reader->go_to_global_char_offset(off);
+		else
+			g_book_reader->go_to(sect, page);
 		g_prefs.putString("last_book", path);
 		g_state = STATE_READING;
 		g_needs_redraw = true;
@@ -416,7 +474,7 @@ void open_selected_book()
 
 	Serial.println("[BTN] Book load failed");
 	Paint_Clear(WHITE);
-	Paint_DrawString_EN(200, 220, "Failed to open book", &Font20, WHITE, BLACK);
+	Paint_DrawString_EN(std::max(8, (g_display_width - ((int)strlen("Failed to open book") * Font20.Width)) / 2), std::max(0, (g_display_height - Font20.Height) / 2), "Failed to open book", &Font20, WHITE, BLACK);
 	fast_display(g_image_buffer);
 	delay(2000);
 	g_needs_redraw = true;
@@ -432,7 +490,7 @@ void redraw_screen()
 			wait_for_loader();
 		}
 
-		Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, 0, WHITE);
+		Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, g_display_rotation, WHITE);
 		Paint_SetScale(2);
 
 		g_file_list->render(g_image_buffer, g_power->battery_percent());
@@ -444,11 +502,11 @@ void redraw_screen()
 	{
 		const sFONT *ui_font = WaveshareRenderer::footer_font();
 		const int footer_h = WaveshareRenderer::footer_height();
-		const int footer_top = EPD_3IN97_HEIGHT - footer_h;
+		const int footer_top = g_display_height - footer_h;
 		const int footer_text_y = footer_top + (footer_h - ui_font->Height) / 2;
 
 		g_menu_epd4_ready = false;
-		Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, 0, WHITE);
+		Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, g_display_rotation, WHITE);
 		Paint_SetScale(2);
 		Paint_Clear(WHITE);
 
@@ -465,7 +523,7 @@ void redraw_screen()
 		snprintf(bat_text, sizeof(bat_text), "%d%%", bat_pct);
 
 		int page_px = strlen(page_text) * ui_font->Width;
-		int page_x = std::max(0, (EPD_3IN97_WIDTH - page_px) / 2);
+		int page_x = std::max(0, (g_display_width - page_px) / 2);
 
 		int bat_px = strlen(bat_text) * ui_font->Width;
 		const int icon_w = 16;
@@ -473,7 +531,7 @@ void redraw_screen()
 		const int icon_tip_w = 2;
 		const int icon_gap = 4;
 		const int bat_group_w = icon_w + icon_gap + bat_px;
-		int bat_group_x = std::max(0, EPD_3IN97_WIDTH - 8 - bat_group_w);
+		int bat_group_x = std::max(0, g_display_width - 8 - bat_group_w);
 
 		const char *title = g_book_reader->title();
 		const int early_ellipsis_px = ui_font->Width * 10;
@@ -502,7 +560,7 @@ void redraw_screen()
 			}
 		}
 
-		Paint_DrawLine(0, footer_top, EPD_3IN97_WIDTH, footer_top, BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+		Paint_DrawLine(0, footer_top, g_display_width - 1, footer_top, BLACK, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
 		if (title_buf[0] != '\0')
 			WaveshareRenderer::draw_string(8, footer_text_y, title_buf, ui_font, WHITE, BLACK);
 		WaveshareRenderer::draw_string(page_x, footer_text_y, page_text, ui_font, WHITE, BLACK);
@@ -611,11 +669,15 @@ void save_reading_progress()
 	int idx  = g_file_list->selected_index();
 	String key_sect = "sect_" + String(idx);
 	String key_page = "page_" + String(idx);
+	String key_off  = "off_"  + String(idx);
+	uint32_t off = g_book_reader->current_global_char_offset();
 	g_prefs.putInt(key_sect.c_str(), g_book_reader->current_section());
 	g_prefs.putInt(key_page.c_str(), g_book_reader->current_page());
+	g_prefs.putULong(key_off.c_str(), off);
 	g_prefs.putString("last_book", g_book_reader->path());
 	g_prefs.putInt("last_sect", g_book_reader->current_section());
 	g_prefs.putInt("last_page", g_book_reader->current_page());
+	g_prefs.putULong("last_off", off);
 }
 
 void show_cover_and_sleep()
@@ -648,38 +710,41 @@ void show_cover_and_sleep()
 			{
 				memset(g_image_buf4, 0xFF, (EPD_3IN97_WIDTH / 4) * EPD_3IN97_HEIGHT);
 
-				const int sleep_margin = 8;
-				int target_h = EPD_3IN97_HEIGHT - (sleep_margin * 2);
+				const int sleep_margin = 0;
+				int target_h = g_display_height - (sleep_margin * 2);
 				int target_w = (SLEEP_COVER_W * target_h) / SLEEP_COVER_H;
-				if (target_w > (EPD_3IN97_WIDTH - (sleep_margin * 2)))
+				if (target_w > (g_display_width - (sleep_margin * 2)))
 				{
-					target_w = EPD_3IN97_WIDTH - (sleep_margin * 2);
+					target_w = g_display_width - (sleep_margin * 2);
 					target_h = (SLEEP_COVER_H * target_w) / SLEEP_COVER_W;
 				}
 				if (target_w < 1) target_w = 1;
 				if (target_h < 1) target_h = 1;
 
-				int cx = (EPD_3IN97_WIDTH  - target_w) / 2;
-				int cy = (EPD_3IN97_HEIGHT - target_h) / 2;
+				int cx = (g_display_width  - target_w) / 2;
+				int cy = (g_display_height - target_h) / 2;
 
 				int fb_stride = EPD_3IN97_WIDTH / 4;
 				for (int y = 0; y < target_h; y++)
 				{
 					int fy = cy + y;
-					if (fy < 0 || fy >= EPD_3IN97_HEIGHT) continue;
+					if (fy < 0 || fy >= g_display_height) continue;
 					int sy = (y * SLEEP_COVER_H) / target_h;
 					if (sy >= SLEEP_COVER_H) sy = SLEEP_COVER_H - 1;
 					for (int x = 0; x < target_w; x++)
 					{
 						int fx = cx + x;
-						if (fx < 0 || fx >= EPD_3IN97_WIDTH) continue;
+						if (fx < 0 || fx >= g_display_width) continue;
 						int sx = (x * SLEEP_COVER_W) / target_w;
 						if (sx >= SLEEP_COVER_W) sx = SLEEP_COVER_W - 1;
 						int src_byte  = sy * SLEEP_COVER_STRIDE + sx / 4;
 						int src_shift = 6 - (sx % 4) * 2;
 						uint8_t g4    = (cover[src_byte] >> src_shift) & 0x03;
-						int dst_byte  = fy * fb_stride + fx / 4;
-						int dst_shift = 6 - (fx % 4) * 2;
+						int phys_x = 0;
+						int phys_y = 0;
+						if (!map_logical_to_physical(fx, fy, phys_x, phys_y)) continue;
+						int dst_byte  = phys_y * fb_stride + phys_x / 4;
+						int dst_shift = 6 - (phys_x % 4) * 2;
 						g_image_buf4[dst_byte] &= ~(0x03 << dst_shift);
 						g_image_buf4[dst_byte] |=  (g4   << dst_shift);
 					}
@@ -697,10 +762,10 @@ void show_cover_and_sleep()
 
 	if (!cover_shown)
 	{
-		Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, 0, WHITE);
+		Paint_NewImage(g_image_buffer, EPD_3IN97_WIDTH, EPD_3IN97_HEIGHT, g_display_rotation, WHITE);
 		Paint_SetScale(2);
 		Paint_Clear(WHITE);
-		Paint_DrawString_EN(280, 200, "Sleeping...", &Font24, WHITE, BLACK);
+		Paint_DrawString_EN(std::max(8, (g_display_width - ((int)strlen("Sleeping...") * Font24.Width)) / 2), std::max(0, (g_display_height - Font24.Height) / 2), "Sleeping...", &Font24, WHITE, BLACK);
 		fast_display(g_image_buffer);
 	}
 

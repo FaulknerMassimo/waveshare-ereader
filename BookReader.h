@@ -266,6 +266,13 @@ static std::string decode_entities(const std::string &s)
 struct Page
 {
 	std::vector<std::string> lines;
+	int section_offset = 0;
+};
+
+struct WrappedLine
+{
+	std::string text;
+	int start_offset = 0;
 };
 
 class BookReader
@@ -362,6 +369,46 @@ public:
 	int num_sections() const { return m_num_sections; }
 	const char *title() const { return m_title.c_str(); }
 	const char *path() const { return m_path.c_str(); }
+
+	uint32_t current_global_char_offset() const
+	{
+		if (m_num_sections <= 0) return 0;
+		uint32_t base = section_base_char_offset(m_current_section);
+		int local = 0;
+		if (!m_pages.empty())
+		{
+			int page = std::max(0, std::min(m_current_page, (int)m_pages.size() - 1));
+			local = std::max(0, m_pages[page].section_offset);
+		}
+		return base + (uint32_t)local;
+	}
+
+	void go_to_global_char_offset(uint32_t global_offset)
+	{
+		if (m_num_sections <= 0)
+		{
+			go_to(0, 0);
+			return;
+		}
+
+		uint32_t remaining = global_offset;
+		int target_section = 0;
+		for (int s = 0; s < m_num_sections; s++)
+		{
+			uint32_t len = section_length_chars(s);
+			if (remaining < len || s == m_num_sections - 1)
+			{
+				target_section = s;
+				break;
+			}
+			remaining -= len;
+		}
+
+		m_current_section = target_section;
+		load_current_section();
+		build_pages_for_current_section();
+		m_current_page = page_for_section_offset((int)remaining);
+	}
 
 private:
 	WaveshareRenderer *m_renderer;
@@ -655,19 +702,24 @@ private:
 		int line_h = m_renderer->get_line_height();
 		int max_lines = page_h / line_h;
 
-		std::vector<std::string> all_lines = word_wrap(text, page_w);
+		std::vector<WrappedLine> all_lines = word_wrap(text, page_w);
 
 		for (int i = 0; i < (int)all_lines.size(); i += max_lines)
 		{
 			Page pg;
+			pg.section_offset = all_lines[i].start_offset;
 			int end = std::min(i + max_lines, (int)all_lines.size());
 			for (int j = i; j < end; j++)
-				pg.lines.push_back(all_lines[j]);
+				pg.lines.push_back(all_lines[j].text);
 			m_pages.push_back(std::move(pg));
 		}
 
 		if (m_pages.empty())
-			m_pages.push_back(Page{});
+		{
+			Page empty;
+			empty.section_offset = 0;
+			m_pages.push_back(empty);
+		}
 
 		if (m_current_section >= 0 && m_current_section < (int)m_section_page_counts.size())
 		{
@@ -687,7 +739,7 @@ private:
 		int max_lines = std::max(1, page_h / line_h);
 		int page_w = m_renderer->get_page_width();
 
-		std::vector<std::string> all_lines = word_wrap(text, page_w);
+		std::vector<WrappedLine> all_lines = word_wrap(text, page_w);
 		if (all_lines.empty()) return 1;
 
 		return std::max(1, (int)((all_lines.size() + max_lines - 1) / max_lines));
@@ -738,10 +790,50 @@ private:
 		m_book_pagination_ready = true;
 	}
 
-	std::vector<std::string> word_wrap(const std::string &text, int max_width)
+	int page_for_section_offset(int section_offset) const
 	{
-		std::vector<std::string> lines;
+		if (m_pages.empty()) return 0;
+		if (section_offset <= 0) return 0;
+
+		int best_page = 0;
+		for (int i = 0; i < (int)m_pages.size(); i++)
+		{
+			if (m_pages[i].section_offset <= section_offset)
+				best_page = i;
+			else
+				break;
+		}
+		return std::max(0, std::min(best_page, (int)m_pages.size() - 1));
+	}
+
+	uint32_t section_length_chars(int section) const
+	{
+		if (section < 0 || section >= m_num_sections) return 0;
+		if (m_is_txt)
+		{
+			if (section < (int)m_txt_sections.size())
+				return (uint32_t)m_txt_sections[section].size();
+			return 0;
+		}
+		if (section < (int)m_section_index.size())
+			return m_section_index[section].length;
+		return 0;
+	}
+
+	uint32_t section_base_char_offset(int section) const
+	{
+		uint32_t total = 0;
+		int capped = std::max(0, std::min(section, m_num_sections));
+		for (int i = 0; i < capped; i++)
+			total += section_length_chars(i);
+		return total;
+	}
+
+	std::vector<WrappedLine> word_wrap(const std::string &text, int max_width)
+	{
+		std::vector<WrappedLine> lines;
 		std::string current_line;
+		int current_start = -1;
 
 		size_t pos = 0;
 		while (pos < text.size())
@@ -755,23 +847,30 @@ private:
 			size_t word_end = text.find(' ', pos);
 			if (word_end == std::string::npos) word_end = text.size();
 
+			size_t word_start = pos;
 			std::string word = text.substr(pos, word_end - pos);
 
 			size_t nl = word.find('\n');
 			if (nl != std::string::npos)
 			{
-				word = word.substr(0, nl);
+				std::string before_nl = word.substr(0, nl);
+				int before_start = (int)word_start;
 
-				std::string test = current_line.empty() ? word : current_line + " " + word;
+				std::string test = current_line.empty() ? before_nl : current_line + " " + before_nl;
 				if (m_renderer->get_text_width(test.c_str()) <= max_width)
+				{
+					if (current_line.empty()) current_start = before_start;
 					current_line = test;
+				}
 				else
 				{
-					if (!current_line.empty()) lines.push_back(current_line);
-					current_line = word;
+					if (!current_line.empty()) lines.push_back({current_line, current_start});
+					current_line = before_nl;
+					current_start = before_start;
 				}
-				lines.push_back(current_line);
+				if (!current_line.empty()) lines.push_back({current_line, current_start});
 				current_line = "";
+				current_start = -1;
 				pos = pos + nl + 1;
 				continue;
 			}
@@ -780,12 +879,14 @@ private:
 
 			if (m_renderer->get_text_width(test.c_str()) <= max_width)
 			{
+				if (current_line.empty()) current_start = (int)word_start;
 				current_line = test;
 			}
 			else
 			{
 				if (!current_line.empty())
-					lines.push_back(current_line);
+					lines.push_back({current_line, current_start});
+				size_t consumed = 0;
 				while (m_renderer->get_text_width(word.c_str()) > max_width && word.size() > 1)
 				{
 					int lo = 1, hi = (int)word.size();
@@ -797,15 +898,17 @@ private:
 						else
 							hi = mid;
 					}
-					lines.push_back(word.substr(0, lo));
+					lines.push_back({word.substr(0, lo), (int)(word_start + consumed)});
+					consumed += lo;
 					word = word.substr(lo);
 				}
 				current_line = word;
+				current_start = (int)(word_start + consumed);
 			}
 			pos = word_end + 1;
 		}
 		if (!current_line.empty())
-			lines.push_back(current_line);
+			lines.push_back({current_line, current_start});
 		return lines;
 	}
 
