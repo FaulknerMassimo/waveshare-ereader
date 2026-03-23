@@ -209,144 +209,232 @@ static const uint8_t Font16_Latin_Table[] =
 class WaveshareRenderer
 {
 public:
-  static const int PAGE_W = EPD_3IN97_WIDTH;
-  static const int PAGE_H = EPD_3IN97_HEIGHT - 28;
-  static const int MARGIN_X = 16;
-  static const int MARGIN_Y = 8;
+	static const int PAGE_W = EPD_3IN97_WIDTH;
+	static const int MARGIN_X = 16;
+	static const int MARGIN_Y = 8;
 
-  WaveshareRenderer(UBYTE *frame_buffer)
-    : m_buf(frame_buffer) {}
+	WaveshareRenderer(UBYTE *frame_buffer)
+		: m_buf(frame_buffer) {}
 
-  void draw_pixel(int x, int y, uint8_t color)
-  {
-    Paint_DrawPoint(x, y, color ? BLACK : WHITE, DOT_PIXEL_1X1, DOT_FILL_RIGHTUP);
-  }
+	void draw_pixel(int x, int y, uint8_t color)
+	{
+		Paint_DrawPoint(x, y, color ? BLACK : WHITE, DOT_PIXEL_1X1, DOT_FILL_RIGHTUP);
+	}
 
-  void draw_rect(int x, int y, int w, int h, uint8_t color = 0)
-  {
-    Paint_DrawRectangle(x, y, x + w, y + h, color ? BLACK : WHITE, DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
-  }
+	void draw_rect(int x, int y, int w, int h, uint8_t color = 0)
+	{
+		Paint_DrawRectangle(x, y, x + w, y + h, color ? BLACK : WHITE, DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
+	}
 
-  void fill_rect(int x, int y, int w, int h, uint8_t color = 0)
-  {
-    Paint_DrawRectangle(x, y, x + w, y + h, color ? BLACK : WHITE, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-  }
+	void fill_rect(int x, int y, int w, int h, uint8_t color = 0)
+	{
+		Paint_DrawRectangle(x, y, x + w, y + h, color ? BLACK : WHITE, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+	}
 
-  void draw_circle(int x, int y, int r, uint8_t color = 0)
-  {
-    Paint_DrawCircle(x, y, r, color ? BLACK : WHITE, DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
-  }
+	void draw_circle(int x, int y, int r, uint8_t color = 0)
+	{
+		Paint_DrawCircle(x, y, r, color ? BLACK : WHITE, DOT_PIXEL_1X1, DRAW_FILL_EMPTY);
+	}
 
-  void fill_circle(int x, int y, int r, uint8_t color = 0)
-  {
-    Paint_DrawCircle(x, y, r, color ? BLACK : WHITE, DOT_PIXEL_1X1, DRAW_FILL_FULL);
-  }
+	void fill_circle(int x, int y, int r, uint8_t color = 0)
+	{
+		Paint_DrawCircle(x, y, r, color ? BLACK : WHITE, DOT_PIXEL_1X1, DRAW_FILL_FULL);
+	}
 
-  void draw_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint8_t color)
-  {
-    Paint_DrawLine(x0, y0, x1, y1, color ? BLACK : WHITE, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
-    Paint_DrawLine(x1, y1, x2, y2, color ? BLACK : WHITE, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
-    Paint_DrawLine(x2, y2, x0, y0, color ? BLACK : WHITE, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
-  }
+	void draw_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint8_t color)
+	{
+		Paint_DrawLine(x0, y0, x1, y1, color ? BLACK : WHITE, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+		Paint_DrawLine(x1, y1, x2, y2, color ? BLACK : WHITE, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+		Paint_DrawLine(x2, y2, x0, y0, color ? BLACK : WHITE, DOT_PIXEL_1X1, LINE_STYLE_SOLID);
+	}
 
-  void fill_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint8_t color)
-  {
-    int xmin = std::min({x0, x1, x2});
-    int xmax = std::max({x0, x1, x2});
-    int ymin = std::min({y0, y1, y2});
-    int ymax = std::max({y0, y1, y2});
-    fill_rect(xmin, ymin, xmax - xmin, ymax - ymin, color);
-  }
+	void fill_triangle(int x0, int y0, int x1, int y1, int x2, int y2, uint8_t color)
+	{
+		int xmin = std::min({x0, x1, x2});
+		int xmax = std::max({x0, x1, x2});
+		int ymin = std::min({y0, y1, y2});
+		int ymax = std::max({y0, y1, y2});
+		fill_rect(xmin, ymin, xmax - xmin, ymax - ymin, color);
+	}
 
-  int get_text_width(const char *text, bool bold = false, bool /*italic*/ = false)
-  {
-    int w = 0;
-    for (const unsigned char *p = (const unsigned char *)text; *p; p++)
-    {
-      if ((*p >= 32 && *p < 127) || (*p >= 0xA0))
-        w += Font16.Width;
-    }
-    (void)bold;
-    return w;
-  }
+	int get_text_width(const char *text, bool bold = false, bool /*italic*/ = false)
+	{
+		const sFONT *font = body_font();
+		int w = 0;
+		for (const unsigned char *p = (const unsigned char *)text; *p; p++)
+		{
+			if ((*p >= 32 && *p < 127) || (*p >= 0xA0))
+				w += font->Width;
+		}
+		(void)bold;
+		return w;
+	}
 
-  void draw_text(int x, int y, const char *text, bool bold = false, bool /*italic*/ = false)
-  {
-    (void)bold;
-    int cx = x;
-    for (const unsigned char *p = (const unsigned char *)text; *p; p++)
-    {
-      unsigned char ch = *p;
-      if (ch >= 32 && ch < 127)
-      {
-        char tmp[2] = { (char)ch, 0 };
-        Paint_DrawString_EN(cx, y, tmp, &Font16, WHITE, BLACK);
-      }
-      else if (ch >= 0xA0)
-      {
-        draw_latin1_char(cx, y, ch);
-      }
-      cx += Font16.Width;
-    }
-  }
+	void draw_text(int x, int y, const char *text, bool bold = false, bool /*italic*/ = false)
+	{
+		(void)bold;
+		const sFONT *font = body_font();
+		int cx = x;
+		for (const unsigned char *p = (const unsigned char *)text; *p; p++)
+		{
+			unsigned char ch = *p;
+			if (ch >= 32 && ch < 127)
+			{
+				draw_ascii_char_at(cx, y, ch, font, WHITE, BLACK);
+			}
+			else if (ch >= 0xA0)
+			{
+				draw_latin1_char_at(cx, y, ch, font, BLACK);
+			}
+			cx += font->Width;
+		}
+	}
 
-  void draw_image(const std::string &/*filename*/,
-                  const uint8_t */*data*/, size_t /*data_size*/,
-                  int x, int y, int w, int h)
-  {
-    draw_rect(x + 4, y + 4, w - 8, h - 8);
-    draw_text(x + 8, y + h / 2 - 8, "[img]");
-  }
+	void draw_image(const std::string &/*filename*/, const uint8_t */*data*/, size_t /*data_size*/, int x, int y, int w, int h)
+	{
+		draw_rect(x + 4, y + 4, w - 8, h - 8);
+		draw_text(x + 8, y + h / 2 - 8, "[img]");
+	}
 
-  void clear_screen()   { Paint_Clear(WHITE); }
-  void flush_display()  { EPD_3IN97_Init_Fast(); EPD_3IN97_Display_Fast(m_buf); }
+	void clear_screen()   { Paint_Clear(WHITE); }
+	void flush_display()  { EPD_3IN97_Init_Fast(); EPD_3IN97_Display_Fast(m_buf); }
 
-  int get_page_width()  { return PAGE_W - MARGIN_X * 2; }
-  int get_page_height() { return PAGE_H - MARGIN_Y * 2; }
-  int get_space_width() { return Font16.Width; }
-  int get_line_height() { return Font16.Height + 4; }
-  int margin_left()     { return MARGIN_X; }
-  int margin_top()      { return MARGIN_Y; }
+	int get_page_width()  { return PAGE_W - MARGIN_X * 2; }
+	int get_page_height() { return EPD_3IN97_HEIGHT - footer_height() - MARGIN_Y * 2; }
+	int get_space_width() { return body_font()->Width; }
+	int get_line_height() { return body_font()->Height + body_line_spacing(); }
+	int margin_left()     { return MARGIN_X; }
+	int margin_top()      { return MARGIN_Y; }
 
-  static void draw_string(int x, int y, const char *text, const sFONT *font, UWORD bg, UWORD fg)
-  {
-    int cx = x;
-    for (const unsigned char *p = (const unsigned char *)text; *p; p++)
-    {
-      unsigned char ch = *p;
-      if (ch >= 0xA0)
-      {
-        draw_latin1_char_at(cx, y, ch, font, fg);
-      }
-      else if (ch >= 32)
-      {
-        char tmp[2] = { (char)ch, 0 };
-        Paint_DrawString_EN(cx, y, tmp, const_cast<sFONT*>(font), bg, fg);
-      }
-      cx += font->Width;
-    }
-  }
+	static void set_body_font(const sFONT *font)
+	{
+		if (font) body_font_ref() = font;
+	}
+
+	static const sFONT *body_font()
+	{
+		return body_font_ref();
+	}
+
+	static int footer_height()
+	{
+		return footer_font()->Height + 12;
+	}
+
+	static const sFONT *footer_font()
+	{
+		return &Font12;
+	}
+
+	static const sFONT *font17()
+	{
+		return &virtual_font17_ref();
+	}
+
+	static const sFONT *font18()
+	{
+		return &virtual_font18_ref();
+	}
+
+	static void draw_string(int x, int y, const char *text, const sFONT *font, UWORD bg, UWORD fg)
+	{
+		if (!font) font = body_font();
+		int cx = x;
+		for (const unsigned char *p = (const unsigned char *)text; *p; p++)
+		{
+			unsigned char ch = *p;
+			if (ch >= 0xA0)
+			{
+				draw_latin1_char_at(cx, y, ch, font, fg);
+			}
+			else if (ch >= 32)
+			{
+				draw_ascii_char_at(cx, y, ch, font, bg, fg);
+			}
+			cx += font->Width;
+		}
+	}
 
 private:
-  UBYTE *m_buf;
+	UBYTE *m_buf;
 
-  static void draw_latin1_char_at(int x, int y, unsigned char ch, const sFONT *font, UWORD fg)
-  {
-    if (ch < 0xA0) return;
-    int char_idx = ch - 0xA0;
-    int bytes_per_row = (font->Width + 7) / 8;
-    const uint8_t *glyph = Font16_Latin_Table + char_idx * bytes_per_row * font->Height;
-    for (int row = 0; row < (int)font->Height; row++)
-      for (int col = 0; col < (int)font->Width; col++)
-      {
-        int bi = row * bytes_per_row + col / 8;
-        if (glyph[bi] & (0x80 >> (col % 8)))
-          Paint_DrawPoint(x + col, y + row, fg, DOT_PIXEL_1X1, DOT_FILL_RIGHTUP);
-      }
-  }
+	static const sFONT *&body_font_ref()
+	{
+		static const sFONT *font = &Font16;
+		return font;
+	}
 
-  void draw_latin1_char(int x, int y, unsigned char ch)
-  {
-    draw_latin1_char_at(x, y, ch, &Font16, BLACK);
-  }
+	static const sFONT &virtual_font17_ref()
+	{
+		static const sFONT font17 = { Font16.table, 12, 17 };
+		return font17;
+	}
+
+	static const sFONT &virtual_font18_ref()
+	{
+		static const sFONT font18 = { Font16.table, 12, 18 };
+		return font18;
+	}
+
+	static bool is_virtual_scaled_font(const sFONT *font)
+	{
+		return font == &virtual_font17_ref() || font == &virtual_font18_ref();
+	}
+
+	static int body_line_spacing()
+	{
+		return std::max(2, (int)body_font()->Height / 4);
+	}
+
+	static void draw_ascii_char_scaled_from_font16(int x, int y, unsigned char ch, const sFONT *font, UWORD fg)
+	{
+		if (ch < 32 || ch > 126) return;
+		const int src_w = 11;
+		const int src_h = 16;
+		const int src_bytes_per_row = (src_w + 7) / 8;
+		const int src_glyph_size = src_bytes_per_row * src_h;
+		const uint8_t *glyph = Font16.table + (ch - 32) * src_glyph_size;
+
+		for (int row = 0; row < (int)font->Height; row++)
+			for (int col = 0; col < (int)font->Width; col++)
+			{
+				int src_row = (row * src_h) / (int)font->Height;
+				int src_col = (col * src_w) / (int)font->Width;
+				int bi = src_row * src_bytes_per_row + src_col / 8;
+				if (glyph[bi] & (0x80 >> (src_col % 8)))
+					Paint_DrawPoint(x + col, y + row, fg, DOT_PIXEL_1X1, DOT_FILL_RIGHTUP);
+			}
+	}
+
+	static void draw_ascii_char_at(int x, int y, unsigned char ch, const sFONT *font, UWORD bg, UWORD fg)
+	{
+		if (is_virtual_scaled_font(font))
+		{
+			draw_ascii_char_scaled_from_font16(x, y, ch, font, fg);
+			return;
+		}
+
+		char tmp[2] = { (char)ch, 0 };
+		Paint_DrawString_EN(x, y, tmp, const_cast<sFONT*>(font), bg, fg);
+	}
+
+	static void draw_latin1_char_at(int x, int y, unsigned char ch, const sFONT *font, UWORD fg)
+	{
+		if (ch < 0xA0) return;
+		int char_idx = ch - 0xA0;
+		const int src_w = 11;
+		const int src_h = 16;
+		const int src_bytes_per_row = (src_w + 7) / 8;
+		const int src_glyph_size = src_bytes_per_row * src_h;
+		const uint8_t *glyph = Font16_Latin_Table + char_idx * src_glyph_size;
+		for (int row = 0; row < (int)font->Height; row++)
+			for (int col = 0; col < (int)font->Width; col++)
+			{
+				int src_row = (row * src_h) / (int)font->Height;
+				int src_col = (col * src_w) / (int)font->Width;
+				int bi = src_row * src_bytes_per_row + src_col / 8;
+				if (glyph[bi] & (0x80 >> (src_col % 8)))
+					Paint_DrawPoint(x + col, y + row, fg, DOT_PIXEL_1X1, DOT_FILL_RIGHTUP);
+			}
+	}
 };
