@@ -59,6 +59,10 @@ static const char *TAG = "MAIN";
 #define SLEEP_TIMEOUT_MS (5UL * 60UL * 1000UL)
 #define DEBOUNCE_MS 50
 #define LONG_PRESS_MS 3000
+#define SERIAL_BOOT_DELAY_MS 50
+#define SD_VERBOSE_BOOT_LISTING 0
+
+static bool g_woke_from_sleep = false;
 
 enum AppState {
 	STATE_FILE_LIST,
@@ -165,16 +169,16 @@ void background_task(void *param)
 void request_book_load(const char *path)
 {
 	strncpy(g_load_path, path, sizeof(g_load_path) - 1);
-	g_job_type     = JOB_BOOK;
-	g_load_done    = false;
+	g_job_type = JOB_BOOK;
+	g_load_done = false;
 	g_load_success = false;
 	xSemaphoreGive(g_load_sem);
 }
 
 void request_cover_load()
 {
-	g_job_type     = JOB_COVERS;
-	g_load_done    = false;
+	g_job_type = JOB_COVERS;
+	g_load_done = false;
 	g_load_success = false;
 	xSemaphoreGive(g_load_sem);
 }
@@ -192,6 +196,7 @@ void open_selected_book();
 void init_sd();
 void handle_buttons();
 void show_cover_and_sleep();
+void prepare_for_low_power_sleep();
 void redraw_screen();
 void save_reading_progress();
 void request_book_load(const char *path);
@@ -227,7 +232,8 @@ bool map_logical_to_physical(int logical_x, int logical_y, int &phys_x, int &phy
 void setup()
 {
 	Serial.begin(115200);
-	delay(500);
+	delay(SERIAL_BOOT_DELAY_MS);
+	g_woke_from_sleep = (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT1);
 
 	esp_task_wdt_config_t wdt_config = {
 		.timeout_ms = 30000,
@@ -238,9 +244,9 @@ void setup()
 
 	ESP_LOGI(TAG, "E-Reader booting...");
 
-	pinMode(BTN_UP,     INPUT_PULLUP);
-	pinMode(BTN_SELECT, INPUT_PULLUP);
-	pinMode(BTN_DOWN,   INPUT_PULLUP);
+	pinMode(BTN_UP, INPUT);
+	pinMode(BTN_SELECT, INPUT);
+	pinMode(BTN_DOWN, INPUT);
 
 	Wire.begin(AXP_SDA, AXP_SCL);
 
@@ -274,7 +280,7 @@ void setup()
 		fast_display(g_image_buffer);
 
 		request_book_load(last_book.c_str());
-		while (!g_load_done) { delay(50); }
+		while (!g_load_done) { delay(20); }
 
 		if (g_load_success)
 		{
@@ -325,6 +331,7 @@ void init_sd()
 	Serial.println("[SD] Mounted OK");
 	Serial.printf("[SD] Card type: %d\n", SD_MMC.cardType());
 	Serial.printf("[SD] Card size: %llu MB\n", SD_MMC.cardSize() / (1024 * 1024));
+	#if SD_VERBOSE_BOOT_LISTING
 	Serial.println("[SD] Root directory contents:");
 	File root = SD_MMC.open("/");
 	if (root && root.isDirectory())
@@ -340,16 +347,26 @@ void init_sd()
 	{
 		Serial.println("[SD] Could not open root /");
 	}
+	#endif
 }
 
 void init_display()
 {
 	DEV_Module_Init();
-	EPD_3IN97_Init();
-	EPD_3IN97_Clear();
-	g_fast_epd_ready = false;
-	g_fast_base_synced = false;
-	DEV_Delay_ms(500);
+	if (g_woke_from_sleep)
+	{
+		EPD_3IN97_Init_Fast();
+		g_fast_epd_ready = true;
+		g_fast_base_synced = false;
+	}
+	else
+	{
+		EPD_3IN97_Init();
+		EPD_3IN97_Clear();
+		g_fast_epd_ready = false;
+		g_fast_base_synced = false;
+		DEV_Delay_ms(500);
+	}
 
 	UDOUBLE buf1_size = ((EPD_3IN97_WIDTH % 8 == 0) ? (EPD_3IN97_WIDTH / 8) : (EPD_3IN97_WIDTH / 8 + 1)) * EPD_3IN97_HEIGHT;
 
@@ -451,7 +468,7 @@ void open_selected_book()
 	fast_display(g_image_buffer);
 
 	request_book_load(path);
-	while (!g_load_done) { delay(50); }
+	while (!g_load_done) { delay(20); }
 
 	if (g_load_success)
 	{
@@ -584,14 +601,14 @@ void redraw_screen()
 	}
 }
 
-static int  btn_up_prev   = HIGH;
-static int  btn_sel_prev  = HIGH;
-static int  btn_down_prev = HIGH;
+static int btn_up_prev = HIGH;
+static int btn_sel_prev = HIGH;
+static int btn_down_prev = HIGH;
 
 void handle_buttons()
 {
-	int up   = digitalRead(BTN_UP);
-	int sel  = digitalRead(BTN_SELECT);
+	int up = digitalRead(BTN_UP);
+	int sel = digitalRead(BTN_SELECT);
 	int down = digitalRead(BTN_DOWN);
 
 	if (btn_up_prev == HIGH && up == LOW)
@@ -772,7 +789,26 @@ void show_cover_and_sleep()
 	EPD_3IN97_Sleep();
 	DEV_Delay_ms(500);
 	DEV_Module_Exit();
+	prepare_for_low_power_sleep();
 
 	esp_sleep_enable_ext1_wakeup((1ULL << BTN_SELECT), ESP_EXT1_WAKEUP_ALL_LOW);
 	esp_deep_sleep_start();
+}
+
+void prepare_for_low_power_sleep()
+{
+	SD_MMC.end();
+	Wire.end();
+
+	pinMode(BTN_UP, INPUT);
+	pinMode(BTN_DOWN, INPUT);
+	pinMode(BTN_SELECT, INPUT);
+
+	pinMode(SD_CLK, INPUT);
+	pinMode(SD_CMD, INPUT);
+	pinMode(SD_D0, INPUT);
+	pinMode(SD_D1, INPUT);
+	pinMode(SD_D2, INPUT);
+	pinMode(SD_D3, INPUT);
+
 }
